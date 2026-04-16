@@ -161,6 +161,7 @@ export async function processVideo(
   // Cleanup
   if (!retainFrames) {
     log(`Cleaning up temporary frames...`);
+    // @ts-ignore
     fs.rmSync(tempDir, { recursive: true, force: true });
   } else {
     log(`Frames retained at ${tempDir}`);
