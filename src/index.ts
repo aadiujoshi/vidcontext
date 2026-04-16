@@ -128,18 +128,23 @@ export async function processVideo(
     const mimeType = 'image/jpeg';
     
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-               { inlineData: { data: Buffer.from(imageBytes).toString('base64'), mimeType } },
-               { text: prompt }
-            ]
-          }
-        ]
-      });
+      const response = await retryWithBackoff(
+        () => ai.models.generateContent({
+          model,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { inlineData: { data: Buffer.from(imageBytes).toString('base64'), mimeType } },
+                { text: prompt }
+              ]
+            }
+          ]
+        }),
+        5,      // max retries
+        1000,   // base delay 1s → backs off to 1s, 2s, 4s, 8s, 16s
+        log
+      );
 
       const description = response.text || '';
       
@@ -169,4 +174,33 @@ export async function processVideo(
 
   log(`Video processing complete. Analyzed ${results.length} valid frames.`);
   return results;
+}
+
+// Retry helper with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 5,
+  baseDelayMs: number = 1000,
+  log: (...args: any[]) => void = () => {}
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isRetryable =
+        err?.status === 503 ||
+        err?.status === 429 ||
+        err?.message?.includes('UNAVAILABLE') ||
+        err?.message?.includes('quota');
+
+      if (!isRetryable || attempt === maxRetries) {
+        throw err;
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      log(`Gemini API error (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${Math.round(delay)}ms...`);
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+  throw new Error('Retry limit reached'); // unreachable, but satisfies TS
 }
